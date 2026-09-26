@@ -1,0 +1,343 @@
+openapi: 3.0.3
+info:
+  title: My Fridge API
+  description: >
+    Contratto per il backend di My Fridge. L'app mobile è già scritta contro
+    questa interfaccia (vedi src/api/IFoodApi.ts); l'implementazione attuale
+    è locale (AsyncStorage) tramite src/api/LocalFoodApi.ts e verrà sostituita
+    da un client HTTP conforme a questo contratto.
+  version: 1.0.0
+
+servers:
+  - url: https://api.myfridge.app/v1
+
+tags:
+  - name: items
+    description: CRUD sugli alimenti presenti nel frigo dell'utente
+  - name: barcode
+    description: Ricerca prodotto da codice a barre
+  - name: notifications
+    description: Preferenze di notifica scadenze
+
+paths:
+  /items:
+    get:
+      tags: [items]
+      summary: Elenca gli alimenti dell'utente
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista alimenti
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FoodItem"
+    post:
+      tags: [items]
+      summary: Crea un nuovo alimento
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFoodItemInput"
+      responses:
+        "201":
+          description: Alimento creato
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoodItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /items/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ItemId"
+    get:
+      tags: [items]
+      summary: Recupera un alimento
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Alimento trovato
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoodItem"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [items]
+      summary: Aggiorna parzialmente un alimento
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFoodItemInput"
+      responses:
+        "200":
+          description: Alimento aggiornato
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoodItem"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [items]
+      summary: Elimina un alimento
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Eliminato con successo
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /items/{id}/photo:
+    parameters:
+      - $ref: "#/components/parameters/ItemId"
+    post:
+      tags: [items]
+      summary: Carica/sostituisce la foto dell'alimento
+      description: >
+        Riceve l'immagine come multipart/form-data e restituisce l'URL
+        pubblico da salvare nel campo `photoUrl` dell'alimento.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                photo:
+                  type: string
+                  format: binary
+              required: [photo]
+      responses:
+        "200":
+          description: URL della foto caricata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  photoUrl:
+                    type: string
+                    format: uri
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /barcode/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Codice a barre (EAN-13, EAN-8, UPC-A, ecc.)
+    get:
+      tags: [barcode]
+      summary: Cerca un prodotto tramite codice a barre
+      description: >
+        Il backend fa da proxy/cache verso un database prodotti esterno
+        (es. Open Food Facts) così l'app non dipende da un servizio terzo
+        direttamente e le chiamate possono essere limitate/loggate lato server.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Prodotto trovato
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BarcodeProduct"
+        "404":
+          description: Nessun prodotto trovato per questo codice
+
+  /notifications/settings:
+    get:
+      tags: [notifications]
+      summary: Recupera le preferenze di notifica dell'utente
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Preferenze correnti
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationSettings"
+    put:
+      tags: [notifications]
+      summary: Aggiorna le preferenze di notifica dell'utente
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationSettings"
+      responses:
+        "200":
+          description: Preferenze aggiornate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationSettings"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ItemId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    NotFound:
+      description: Risorsa non trovata
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Richiesta non valida
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    FoodItem:
+      type: object
+      required: [id, name, quantity, unit, expiryDate, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Latte parzialmente scremato
+        quantity:
+          type: number
+          example: 1
+        unit:
+          type: string
+          example: l
+        expiryDate:
+          type: string
+          format: date
+          example: "2026-10-05"
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+        barcode:
+          type: string
+          nullable: true
+          example: "8001234567890"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateFoodItemInput:
+      type: object
+      required: [name, quantity, unit, expiryDate]
+      properties:
+        name:
+          type: string
+        quantity:
+          type: number
+        unit:
+          type: string
+        expiryDate:
+          type: string
+          format: date
+        photoUrl:
+          type: string
+          format: uri
+        barcode:
+          type: string
+
+    UpdateFoodItemInput:
+      type: object
+      properties:
+        name:
+          type: string
+        quantity:
+          type: number
+        unit:
+          type: string
+        expiryDate:
+          type: string
+          format: date
+        photoUrl:
+          type: string
+          format: uri
+        barcode:
+          type: string
+
+    BarcodeProduct:
+      type: object
+      required: [barcode, name]
+      properties:
+        barcode:
+          type: string
+        name:
+          type: string
+        brand:
+          type: string
+        imageUrl:
+          type: string
+          format: uri
+        quantity:
+          type: string
+          description: Quantità/formato riportati dal database prodotti (es. "1 L")
+
+    NotificationSettings:
+      type: object
+      required: [enabled, firstReminderDaysBefore, secondReminderDaysBefore]
+      properties:
+        enabled:
+          type: boolean
+        firstReminderDaysBefore:
+          type: integer
+          minimum: 0
+          example: 3
+        secondReminderDaysBefore:
+          type: integer
+          minimum: 0
+          example: 1
+
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+        code:
+          type: string

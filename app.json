@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "My Fridge",
+    "slug": "my-fridge",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.myfridge.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "La fotocamera è usata per scattare foto agli alimenti e scansionare i codici a barre.",
+        "NSPhotoLibraryUsageDescription": "Consente di scegliere una foto per l'alimento dalla libreria."
+      }
+    },
+    "android": {
+      "package": "com.myfridge.app",
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "L'app usa la fotocamera per fotografare gli alimenti e scansionare i codici a barre."
+        }
+      ],
+      "expo-notifications"
+    ]
+  }
+}
