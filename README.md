@@ -41,6 +41,29 @@ npm run android
 npm run ios
 ```
 
+## Build (EAS Build)
+
+Il progetto è configurato per [EAS Build](https://docs.expo.dev/build/introduction/)
+(vedi `eas.json`). Per creare una build installabile (APK/IPA) serve un
+account Expo:
+
+```bash
+npm install -g eas-cli
+eas login
+eas init          # collega il progetto a un account/progetto EAS (una tantum)
+eas build --platform android --profile preview
+eas build --platform ios --profile preview
+```
+
+Profili disponibili in `eas.json`:
+
+- `development`: build con `expo-dev-client` per lo sviluppo con moduli nativi
+- `preview`: APK Android/build interna installabile per il test
+- `production`: build per lo store (con `autoIncrement` del build number)
+
+Per lo sviluppo quotidiano basta Expo Go; la build `development` serve se
+vuoi testare l'app come binario nativo con `expo-dev-client`.
+
 ## Struttura del progetto
 
 ```
