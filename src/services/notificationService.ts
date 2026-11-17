@@ -26,22 +26,48 @@ async function writeMap(map: ScheduledMap): Promise<void> {
   await AsyncStorage.setItem(SCHEDULED_MAP_KEY, JSON.stringify(map));
 }
 
-export async function requestNotificationPermissions(): Promise<boolean> {
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-  if (existingStatus !== "granted") {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
+const CHANNEL_ID = "expiry-reminders";
+let channelReady: Promise<void> | null = null;
 
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("expiry-reminders", {
+/** Creates the Android channel once; scheduling on a missing channel fails silently. */
+function ensureChannel(): Promise<void> {
+  if (Platform.OS !== "android") return Promise.resolve();
+  if (!channelReady) {
+    channelReady = Notifications.setNotificationChannelAsync(CHANNEL_ID, {
       name: "Scadenze alimenti",
       importance: Notifications.AndroidImportance.DEFAULT,
-    });
+    })
+      .then(() => undefined)
+      .catch((error) => {
+        channelReady = null;
+        throw error;
+      });
   }
+  return channelReady;
+}
 
-  return finalStatus === "granted";
+/**
+ * Asks for notification permission (only prompts if not decided yet) and
+ * makes sure the Android channel exists. Called at app startup.
+ */
+export async function requestNotificationPermissions(): Promise<boolean> {
+  await ensureChannel();
+  const { status: existingStatus, canAskAgain } =
+    await Notifications.getPermissionsAsync();
+  if (existingStatus === "granted") return true;
+  if (!canAskAgain) return false;
+  const { status } = await Notifications.requestPermissionsAsync();
+  return status === "granted";
+}
+
+function reminderBody(item: FoodItem, daysBefore: number): string {
+  const when =
+    daysBefore === 0
+      ? "scade oggi"
+      : daysBefore === 1
+        ? "scade domani"
+        : `scade tra ${daysBefore} giorni`;
+  return `${item.name} ${when} (${item.expiryDate}).`;
 }
 
 async function cancelNotificationsForItem(itemId: string): Promise<void> {
@@ -74,11 +100,12 @@ export async function rescheduleNotificationsForItem(
     return;
   }
 
-  const offsets = [
-    settings.firstReminderDaysBefore,
-    settings.secondReminderDaysBefore,
-  ];
+  // Same value twice would fire two identical notifications.
+  const offsets = Array.from(
+    new Set([settings.firstReminderDaysBefore, settings.secondReminderDaysBefore])
+  );
 
+  await ensureChannel();
   const scheduledIds: string[] = [];
 
   for (const daysBefore of offsets) {
@@ -88,13 +115,13 @@ export async function rescheduleNotificationsForItem(
     const id = await Notifications.scheduleNotificationAsync({
       content: {
         title: "In scadenza nel frigo",
-        body: `${item.name} scade tra ${daysBefore} giorno${daysBefore === 1 ? "" : "i"} (${item.expiryDate}).`,
+        body: reminderBody(item, daysBefore),
         data: { itemId: item.id },
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
         date: triggerDate,
-        channelId: "expiry-reminders",
+        channelId: CHANNEL_ID,
       },
     });
     scheduledIds.push(id);

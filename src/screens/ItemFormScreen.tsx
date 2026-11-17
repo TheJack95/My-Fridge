@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { format, parseISO } from "date-fns";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/RootNavigator";
 import { useFood } from "../context/FoodContext";
@@ -18,8 +19,9 @@ import { FoodItem } from "../types";
 
 type Props = NativeStackScreenProps<RootStackParamList, "ItemForm">;
 
+// Local calendar date: toISOString() would use UTC and can shift the day.
 function toIsoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return format(date, "yyyy-MM-dd");
 }
 
 export function ItemFormScreen({ route, navigation }: Props) {
@@ -31,7 +33,7 @@ export function ItemFormScreen({ route, navigation }: Props) {
   const [quantity, setQuantity] = useState(String(existing?.quantity ?? 1));
   const [unit, setUnit] = useState(existing?.unit ?? "pz");
   const [expiryDate, setExpiryDate] = useState<Date>(
-    existing ? new Date(existing.expiryDate) : new Date()
+    existing ? parseISO(existing.expiryDate) : new Date()
   );
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | undefined>(
@@ -106,8 +108,12 @@ export function ItemFormScreen({ route, navigation }: Props) {
         text: "Elimina",
         style: "destructive",
         onPress: async () => {
-          await removeItem(existing.id);
-          navigation.goBack();
+          try {
+            await removeItem(existing.id);
+            navigation.goBack();
+          } catch (error) {
+            Alert.alert("Errore", "Non è stato possibile eliminare l'alimento.");
+          }
         },
       },
     ]);

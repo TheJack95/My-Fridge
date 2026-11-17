@@ -1,0 +1,37 @@
+import * as FileSystem from "expo-file-system";
+import { generateId } from "../utils/id";
+
+/**
+ * expo-image-picker returns URIs in the app cache, which the OS may clear at
+ * any time. Photos are copied here so they survive as long as the app does.
+ */
+const PHOTO_DIR = FileSystem.documentDirectory
+  ? `${FileSystem.documentDirectory}photos/`
+  : null;
+
+function isPersisted(uri: string): boolean {
+  return PHOTO_DIR !== null && uri.startsWith(PHOTO_DIR);
+}
+
+/** Copies a picked photo into permanent storage and returns the new URI. */
+export async function persistPhoto(uri?: string): Promise<string | undefined> {
+  if (!uri || !PHOTO_DIR || isPersisted(uri)) return uri;
+  try {
+    await FileSystem.makeDirectoryAsync(PHOTO_DIR, { intermediates: true });
+    const ext = uri.split("?")[0].split(".").pop()?.toLowerCase();
+    const safeExt = ext && /^[a-z0-9]{2,4}$/.test(ext) ? ext : "jpg";
+    const dest = `${PHOTO_DIR}${generateId()}.${safeExt}`;
+    await FileSystem.copyAsync({ from: uri, to: dest });
+    return dest;
+  } catch (error) {
+    // Better to keep the (temporary) photo than to fail the whole save.
+    console.warn("Impossibile salvare la foto in modo permanente", error);
+    return uri;
+  }
+}
+
+/** Deletes a photo previously stored by persistPhoto; ignores anything else. */
+export async function deletePhoto(uri?: string): Promise<void> {
+  if (!uri || !isPersisted(uri)) return;
+  await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+}

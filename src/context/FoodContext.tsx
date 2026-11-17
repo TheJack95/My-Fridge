@@ -19,13 +19,22 @@ import {
 } from "../services/settingsRepository";
 import {
   cancelNotificationsFor,
+  requestNotificationPermissions,
   rescheduleAll,
   rescheduleNotificationsForItem,
 } from "../services/notificationService";
+import { deletePhoto, persistPhoto } from "../services/photoStorage";
+
+/** Keeps the list in the same order LocalFoodApi.listItems returns. */
+function sortByExpiry(items: FoodItem[]): FoodItem[] {
+  return [...items].sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+}
 
 interface FoodContextValue {
   items: FoodItem[];
   loading: boolean;
+  /** True once the first load from storage has finished (successfully or not). */
+  ready: boolean;
   settings: NotificationSettings;
   refresh: () => Promise<void>;
   addItem: (input: CreateFoodItemInput) => Promise<FoodItem>;
@@ -44,8 +53,9 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
     secondReminderDaysBefore: 1,
   });
   const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const load = useCallback(async (): Promise<NotificationSettings> => {
     setLoading(true);
     try {
       const [loadedItems, loadedSettings] = await Promise.all([
@@ -54,19 +64,35 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
       ]);
       setItems(loadedItems);
       setSettings(loadedSettings);
+      return loadedSettings;
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const refresh = useCallback(async () => {
+    await load();
+  }, [load]);
+
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    load()
+      .then((loadedSettings) => {
+        // Without this, users who never open Settings never get reminders.
+        if (loadedSettings.enabled) {
+          requestNotificationPermissions().catch((error) =>
+            console.warn("Permessi notifiche non ottenuti", error)
+          );
+        }
+      })
+      .catch((error) => console.warn("Caricamento iniziale fallito", error))
+      .finally(() => setReady(true));
+  }, [load]);
 
   const addItem = useCallback(
     async (input: CreateFoodItemInput) => {
-      const created = await foodApi.createItem(input);
-      setItems((prev) => [...prev, created]);
+      const photoUri = await persistPhoto(input.photoUri);
+      const created = await foodApi.createItem({ ...input, photoUri });
+      setItems((prev) => sortByExpiry([...prev, created]));
       await rescheduleNotificationsForItem(created, settings);
       return created;
     },
@@ -75,8 +101,18 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
 
   const editItem = useCallback(
     async (id: string, input: UpdateFoodItemInput) => {
-      const updated = await foodApi.updateItem(id, input);
-      setItems((prev) => prev.map((item) => (item.id === id ? updated : item)));
+      const previous = await foodApi.getItem(id);
+      const patch = { ...input };
+      if ("photoUri" in input) {
+        patch.photoUri = await persistPhoto(input.photoUri);
+      }
+      const updated = await foodApi.updateItem(id, patch);
+      if (previous?.photoUri && previous.photoUri !== updated.photoUri) {
+        await deletePhoto(previous.photoUri);
+      }
+      setItems((prev) =>
+        sortByExpiry(prev.map((item) => (item.id === id ? updated : item)))
+      );
       await rescheduleNotificationsForItem(updated, settings);
       return updated;
     },
@@ -84,8 +120,10 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
   );
 
   const removeItem = useCallback(async (id: string) => {
+    const previous = await foodApi.getItem(id);
     await foodApi.deleteItem(id);
     await cancelNotificationsFor(id);
+    await deletePhoto(previous?.photoUri);
     setItems((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
@@ -93,6 +131,9 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
     async (newSettings: NotificationSettings) => {
       await saveNotificationSettings(newSettings);
       setSettings(newSettings);
+      if (newSettings.enabled) {
+        await requestNotificationPermissions();
+      }
       await rescheduleAll(items, newSettings);
     },
     [items]
@@ -102,6 +143,7 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
     () => ({
       items,
       loading,
+      ready,
       settings,
       refresh,
       addItem,
@@ -109,7 +151,7 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
       removeItem,
       updateSettings,
     }),
-    [items, loading, settings, refresh, addItem, editItem, removeItem, updateSettings]
+    [items, loading, ready, settings, refresh, addItem, editItem, removeItem, updateSettings]
   );
 
   return <FoodContext.Provider value={value}>{children}</FoodContext.Provider>;

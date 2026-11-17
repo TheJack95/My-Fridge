@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/RootNavigator";
@@ -33,17 +33,27 @@ export function ScannerScreen({ navigation }: Props) {
     if (scanned || loading) return;
     setScanned(true);
     setLoading(true);
+    let name: string | undefined;
     try {
       const product = await foodApi.lookupBarcode(data);
-      navigation.replace("ItemForm", {
-        prefill: {
-          barcode: data,
-          name: product?.name,
-        },
-      });
+      name = product?.name;
+      if (!product) {
+        Alert.alert(
+          "Prodotto non trovato",
+          "Il codice è stato letto ma il prodotto non è nel database. Inserisci il nome a mano."
+        );
+      }
+    } catch (error) {
+      // Offline or timeout: don't leave the user stuck on the scanner.
+      console.warn("Ricerca barcode fallita", error);
+      Alert.alert(
+        "Ricerca non riuscita",
+        "Non è stato possibile cercare il prodotto (connessione assente?). Inserisci il nome a mano."
+      );
     } finally {
       setLoading(false);
     }
+    navigation.replace("ItemForm", { prefill: { barcode: data, name } });
   };
 
   return (

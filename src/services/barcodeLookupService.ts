@@ -9,13 +9,23 @@ import { BarcodeProduct } from "../types";
  * limiting / caching can live there instead of in the app.
  */
 const OFF_BASE_URL = "https://world.openfoodfacts.org/api/v2/product";
+const LOOKUP_TIMEOUT_MS = 8000;
 
+/** Throws on network errors / timeout; returns null if the product is unknown. */
 export async function lookupBarcodeOnline(
   barcode: string
 ): Promise<BarcodeProduct | null> {
-  const response = await fetch(
-    `${OFF_BASE_URL}/${encodeURIComponent(barcode)}.json`
-  );
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(
+      `${OFF_BASE_URL}/${encodeURIComponent(barcode)}.json`,
+      { signal: controller.signal }
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     return null;
