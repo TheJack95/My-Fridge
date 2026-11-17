@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   Alert,
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,8 +31,10 @@ export function ItemFormScreen({ route, navigation }: Props) {
   const existing = items.find((item) => item.id === itemId);
 
   const [name, setName] = useState(existing?.name ?? prefill?.name ?? "");
-  const [quantity, setQuantity] = useState(String(existing?.quantity ?? 1));
-  const [unit, setUnit] = useState(existing?.unit ?? "pz");
+  const [quantity, setQuantity] = useState(
+    String(existing?.quantity ?? prefill?.quantity ?? 1)
+  );
+  const [unit, setUnit] = useState(existing?.unit ?? prefill?.unit ?? "pz");
   const [expiryDate, setExpiryDate] = useState<Date>(
     existing ? parseISO(existing.expiryDate) : new Date()
   );
@@ -152,18 +155,36 @@ export function ItemFormScreen({ route, navigation }: Props) {
       </View>
 
       <Text style={styles.label}>Data di scadenza</Text>
-      <TouchableOpacity style={styles.input} onPress={() => setShowDatePicker(true)}>
-        <Text>{toIsoDate(expiryDate)}</Text>
-      </TouchableOpacity>
-      {showDatePicker && (
-        <DateTimePicker
-          value={expiryDate}
-          mode="date"
-          onChange={(_, selected) => {
-            setShowDatePicker(false);
-            if (selected) setExpiryDate(selected);
-          }}
-        />
+      {Platform.OS === "ios" ? (
+        // iOS: the compact picker is its own button and opens a calendar
+        // popover; unmounting it on every change (Android flow) breaks it.
+        <View style={styles.iosDateRow}>
+          <DateTimePicker
+            value={expiryDate}
+            mode="date"
+            display="compact"
+            locale="it-IT"
+            onChange={(_, selected) => {
+              if (selected) setExpiryDate(selected);
+            }}
+          />
+        </View>
+      ) : (
+        <>
+          <TouchableOpacity style={styles.input} onPress={() => setShowDatePicker(true)}>
+            <Text>{format(expiryDate, "dd/MM/yyyy")}</Text>
+          </TouchableOpacity>
+          {showDatePicker && (
+            <DateTimePicker
+              value={expiryDate}
+              mode="date"
+              onChange={(_, selected) => {
+                setShowDatePicker(false);
+                if (selected) setExpiryDate(selected);
+              }}
+            />
+          )}
+        </>
       )}
 
       {barcode && <Text style={styles.barcodeText}>Codice a barre: {barcode}</Text>}
@@ -207,6 +228,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   row: { flexDirection: "row", gap: 12 },
+  iosDateRow: { alignItems: "flex-start" },
   flex1: { flex: 1 },
   barcodeText: { color: "#666", marginTop: 8 },
   saveButton: {

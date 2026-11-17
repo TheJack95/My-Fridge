@@ -3,7 +3,17 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { FoodItem, NotificationSettings } from "../types";
 
-const SCHEDULED_MAP_KEY = "@my_fridge/scheduled_notifications";
+/** Per-item id map used by older versions; no longer needed. */
+const LEGACY_SCHEDULED_MAP_KEY = "@my_fridge/scheduled_notifications";
+
+/**
+ * iOS keeps at most 64 pending local notifications per app and silently
+ * drops the rest, so only the nearest reminders are scheduled. The window
+ * moves forward because sync runs again on startup and on every resume.
+ */
+const MAX_SCHEDULED = 60;
+
+const CHANNEL_ID = "expiry-reminders";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -15,18 +25,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-type ScheduledMap = Record<string, string[]>; // itemId -> notification ids
-
-async function readMap(): Promise<ScheduledMap> {
-  const raw = await AsyncStorage.getItem(SCHEDULED_MAP_KEY);
-  return raw ? JSON.parse(raw) : {};
-}
-
-async function writeMap(map: ScheduledMap): Promise<void> {
-  await AsyncStorage.setItem(SCHEDULED_MAP_KEY, JSON.stringify(map));
-}
-
-const CHANNEL_ID = "expiry-reminders";
 let channelReady: Promise<void> | null = null;
 
 /** Creates the Android channel once; scheduling on a missing channel fails silently. */
@@ -70,14 +68,6 @@ function reminderBody(item: FoodItem, daysBefore: number): string {
   return `${item.name} ${when} (${item.expiryDate}).`;
 }
 
-async function cancelNotificationsForItem(itemId: string): Promise<void> {
-  const map = await readMap();
-  const ids = map[itemId] ?? [];
-  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
-  delete map[itemId];
-  await writeMap(map);
-}
-
 function triggerDateFor(expiryDateIso: string, daysBefore: number): Date | null {
   const expiry = new Date(`${expiryDateIso}T09:00:00`);
   const trigger = new Date(expiry);
@@ -85,34 +75,46 @@ function triggerDateFor(expiryDateIso: string, daysBefore: number): Date | null 
   return trigger.getTime() > Date.now() ? trigger : null;
 }
 
-/**
- * Cancels any previously scheduled reminders for this item and schedules
- * the two configurable "expiring soon" notifications, if their dates are
- * still in the future.
- */
-export async function rescheduleNotificationsForItem(
-  item: FoodItem,
+interface PlannedReminder {
+  item: FoodItem;
+  daysBefore: number;
+  date: Date;
+}
+
+/** The reminders that should be pending right now, nearest first, capped. */
+export function planReminders(
+  items: FoodItem[],
   settings: NotificationSettings
-): Promise<void> {
-  await cancelNotificationsForItem(item.id);
-
-  if (!settings.enabled) {
-    return;
-  }
-
+): PlannedReminder[] {
+  if (!settings.enabled) return [];
   // Same value twice would fire two identical notifications.
   const offsets = Array.from(
     new Set([settings.firstReminderDaysBefore, settings.secondReminderDaysBefore])
   );
+  const planned: PlannedReminder[] = [];
+  for (const item of items) {
+    for (const daysBefore of offsets) {
+      const date = triggerDateFor(item.expiryDate, daysBefore);
+      if (date) planned.push({ item, daysBefore, date });
+    }
+  }
+  planned.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return planned.slice(0, MAX_SCHEDULED);
+}
+
+async function doSync(
+  items: FoodItem[],
+  settings: NotificationSettings
+): Promise<void> {
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  await AsyncStorage.removeItem(LEGACY_SCHEDULED_MAP_KEY);
+
+  const planned = planReminders(items, settings);
+  if (planned.length === 0) return;
 
   await ensureChannel();
-  const scheduledIds: string[] = [];
-
-  for (const daysBefore of offsets) {
-    const triggerDate = triggerDateFor(item.expiryDate, daysBefore);
-    if (!triggerDate) continue;
-
-    const id = await Notifications.scheduleNotificationAsync({
+  for (const { item, daysBefore, date } of planned) {
+    await Notifications.scheduleNotificationAsync({
       content: {
         title: "In scadenza nel frigo",
         body: reminderBody(item, daysBefore),
@@ -120,31 +122,25 @@ export async function rescheduleNotificationsForItem(
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: triggerDate,
+        date,
         channelId: CHANNEL_ID,
       },
     });
-    scheduledIds.push(id);
   }
-
-  const map = await readMap();
-  map[item.id] = scheduledIds;
-  await writeMap(map);
 }
 
-export async function cancelNotificationsFor(itemId: string): Promise<void> {
-  await cancelNotificationsForItem(itemId);
-}
+let syncQueue: Promise<void> = Promise.resolve();
 
 /**
- * Re-applies the current settings to every item's reminders, e.g. after
- * the user changes the configurable day offsets.
+ * Replaces every pending reminder with the ones computed from the current
+ * items and settings. Calls are serialized so overlapping syncs can't leave
+ * duplicates behind.
  */
-export async function rescheduleAll(
+export function syncNotifications(
   items: FoodItem[],
   settings: NotificationSettings
 ): Promise<void> {
-  for (const item of items) {
-    await rescheduleNotificationsForItem(item, settings);
-  }
+  const run = syncQueue.then(() => doSync(items, settings));
+  syncQueue = run.catch(() => undefined);
+  return run;
 }

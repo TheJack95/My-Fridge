@@ -4,9 +4,11 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { foodApi } from "../api/LocalFoodApi";
+import { AppState } from "react-native";
+import { foodApi } from "../api";
 import {
   CreateFoodItemInput,
   FoodItem,
@@ -18,12 +20,14 @@ import {
   saveNotificationSettings,
 } from "../services/settingsRepository";
 import {
-  cancelNotificationsFor,
   requestNotificationPermissions,
-  rescheduleAll,
-  rescheduleNotificationsForItem,
+  syncNotifications,
 } from "../services/notificationService";
-import { deletePhoto, persistPhoto } from "../services/photoStorage";
+import {
+  deletePhoto,
+  persistPhoto,
+  repairStoredPhoto,
+} from "../services/photoStorage";
 
 /** Keeps the list in the same order LocalFoodApi.listItems returns. */
 function sortByExpiry(items: FoodItem[]): FoodItem[] {
@@ -54,6 +58,8 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
   });
   const [loading, setLoading] = useState(true);
   const [ready, setReady] = useState(false);
+  // Bumped after the permission prompt so reminders are scheduled again.
+  const [permissionVersion, setPermissionVersion] = useState(0);
 
   const load = useCallback(async (): Promise<NotificationSettings> => {
     setLoading(true);
@@ -79,24 +85,69 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
       .then((loadedSettings) => {
         // Without this, users who never open Settings never get reminders.
         if (loadedSettings.enabled) {
-          requestNotificationPermissions().catch((error) =>
-            console.warn("Permessi notifiche non ottenuti", error)
-          );
+          requestNotificationPermissions()
+            .then(() => setPermissionVersion((v) => v + 1))
+            .catch((error) =>
+              console.warn("Permessi notifiche non ottenuti", error)
+            );
         }
       })
       .catch((error) => console.warn("Caricamento iniziale fallito", error))
       .finally(() => setReady(true));
   }, [load]);
 
+  // Photos saved by older versions point to the image picker cache, which
+  // the OS may clear: move them to permanent storage once.
+  useEffect(() => {
+    if (!ready) return;
+    const legacy = items.filter((item) => item.photoUri);
+    if (legacy.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const item of legacy) {
+        const repaired = await repairStoredPhoto(item.photoUri);
+        if (cancelled || repaired === item.photoUri) continue;
+        const updated = await foodApi.updateItem(item.id, { photoUri: repaired });
+        setItems((prev) => prev.map((i) => (i.id === item.id ? updated : i)));
+      }
+    })().catch((error) => console.warn("Migrazione foto fallita", error));
+    return () => {
+      cancelled = true;
+    };
+    // Only on the first ready render: later photos are persisted on save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  // Reminders are derived from items + settings: resync whenever they change.
+  useEffect(() => {
+    if (!ready) return;
+    syncNotifications(items, settings).catch((error) =>
+      console.warn("Programmazione notifiche fallita", error)
+    );
+  }, [ready, items, settings, permissionVersion]);
+
+  // Only the nearest reminders fit in the OS queue: refill it on resume.
+  const latest = useRef({ items, settings });
+  latest.current = { items, settings };
+  useEffect(() => {
+    if (!ready) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      syncNotifications(latest.current.items, latest.current.settings).catch(
+        (error) => console.warn("Programmazione notifiche fallita", error)
+      );
+    });
+    return () => sub.remove();
+  }, [ready]);
+
   const addItem = useCallback(
     async (input: CreateFoodItemInput) => {
       const photoUri = await persistPhoto(input.photoUri);
       const created = await foodApi.createItem({ ...input, photoUri });
       setItems((prev) => sortByExpiry([...prev, created]));
-      await rescheduleNotificationsForItem(created, settings);
       return created;
     },
-    [settings]
+    []
   );
 
   const editItem = useCallback(
@@ -113,16 +164,14 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
       setItems((prev) =>
         sortByExpiry(prev.map((item) => (item.id === id ? updated : item)))
       );
-      await rescheduleNotificationsForItem(updated, settings);
       return updated;
     },
-    [settings]
+    []
   );
 
   const removeItem = useCallback(async (id: string) => {
     const previous = await foodApi.getItem(id);
     await foodApi.deleteItem(id);
-    await cancelNotificationsFor(id);
     await deletePhoto(previous?.photoUri);
     setItems((prev) => prev.filter((item) => item.id !== id));
   }, []);
@@ -133,10 +182,10 @@ export function FoodProvider({ children }: { children: React.ReactNode }) {
       setSettings(newSettings);
       if (newSettings.enabled) {
         await requestNotificationPermissions();
+        setPermissionVersion((v) => v + 1);
       }
-      await rescheduleAll(items, newSettings);
     },
-    [items]
+    []
   );
 
   const value = useMemo(

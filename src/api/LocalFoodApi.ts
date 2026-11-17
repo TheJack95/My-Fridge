@@ -74,5 +74,3 @@ export class LocalFoodApi implements IFoodApi {
     return lookupBarcodeOnline(barcode);
   }
 }
-
-export const foodApi = new LocalFoodApi();

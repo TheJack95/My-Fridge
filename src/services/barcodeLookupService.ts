@@ -41,9 +41,12 @@ export async function lookupBarcodeOnline(
 
   return {
     barcode,
-    name: product.product_name || product.generic_name || "Prodotto sconosciuto",
-    brand: product.brands,
-    imageUrl: product.image_front_small_url || product.image_url,
+    // Empty name = product known but unnamed; the form asks the user.
+    name: (product.product_name || product.generic_name || "").trim(),
+    // "brands" is a comma-separated list; the first one is the main brand.
+    brand: product.brands?.split(",")[0]?.trim() || undefined,
+    imageUrl:
+      product.image_front_url || product.image_front_small_url || product.image_url,
     quantity: product.quantity,
   };
 }

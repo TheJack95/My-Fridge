@@ -3,7 +3,8 @@ import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/RootNavigator";
-import { foodApi } from "../api/LocalFoodApi";
+import { foodApi } from "../api";
+import { parseProductQuantity } from "../utils/quantity";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Scanner">;
 
@@ -33,11 +34,26 @@ export function ScannerScreen({ navigation }: Props) {
     if (scanned || loading) return;
     setScanned(true);
     setLoading(true);
-    let name: string | undefined;
+    let prefill: NonNullable<RootStackParamList["ItemForm"]["prefill"]> = {
+      barcode: data,
+    };
     try {
       const product = await foodApi.lookupBarcode(data);
-      name = product?.name;
-      if (!product) {
+      if (product) {
+        const brandMissing =
+          product.brand &&
+          !product.name.toLowerCase().includes(product.brand.toLowerCase());
+        prefill = {
+          ...prefill,
+          name: product.name
+            ? brandMissing
+              ? `${product.name} (${product.brand})`
+              : product.name
+            : product.brand,
+          photoUri: product.imageUrl,
+          ...parseProductQuantity(product.quantity),
+        };
+      } else {
         Alert.alert(
           "Prodotto non trovato",
           "Il codice è stato letto ma il prodotto non è nel database. Inserisci il nome a mano."
@@ -53,7 +69,7 @@ export function ScannerScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
     }
-    navigation.replace("ItemForm", { prefill: { barcode: data, name } });
+    navigation.replace("ItemForm", { prefill });
   };
 
   return (
